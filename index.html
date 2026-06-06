@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>GEE PALMA — Books</title>
+  <link rel="stylesheet" href="gee-styles.css" />
+  <!-- PDF.js from CDN -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+  <!-- Firebase SDKs -->
+  <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-storage-compat.js"></script>
+</head>
+<body>
+  <main>
+    <section class="cover" id="cover">
+      <div class="title">GEE PALMA</div>
+      <div class="subtitle">Stories & Books by Gee Palma</div>
+      <button class="enter-btn" id="enterBtn">Enter</button>
+    </section>
+
+    <div class="container" id="app" style="display:none">
+      <div style="display:flex;gap:16px;align-items:center;justify-content:space-between">
+        <div style="display:flex;gap:12px;align-items:center">
+          <h2>Admin Dashboard</h2>
+          <div id="signedInfo" style="font-size:0.95rem;color:#6b5b4b"></div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button id="googleSignBtn" class="switch">Sign in with Google</button>
+          <button id="signOutBtn" class="switch" style="display:none">Sign out</button>
+          <button id="switchToReader" class="switch">Switch to Reader View</button>
+        </div>
+      </div>
+
+      <section class="admin-panel" id="adminPanel">
+        <h3>Admin Controls (requires admin Gmail)</h3>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px">
+          <input id="adminAccessEmail" class="input" placeholder="Enter admin Gmail to unlock" />
+          <button id="adminLogin" class="btn">Unlock Admin View</button>
+        </div>
+        <div id="adminControls" style="display:none">
+          <h4>Upload a Book</h4>
+          <div class="row" style="margin-top:8px;flex-wrap:wrap">
+            <input id="titleInput" class="input" placeholder="Book title" style="flex:1;min-width:220px" />
+          </div>
+          <div class="row" style="margin-top:8px;flex-wrap:wrap">
+            <textarea id="descriptionInput" class="input" placeholder="Short description" rows="3" style="flex:1;min-width:220px;resize:vertical"></textarea>
+          </div>
+          <div class="row" style="margin-top:8px;flex-wrap:wrap">
+            <input id="coverInput" type="file" accept="image/png" />
+            <input id="pdfInput" type="file" accept="application/pdf" />
+            <button id="uploadBtn" class="btn">Upload</button>
+          </div>
+          <div class="note">Upload a PNG cover and a PDF file. The PDF will also be uploaded to Firebase Storage for remote access.</div>
+          <h4 style="margin-top:18px">Existing Books (admin)</h4>
+          <div id="adminList" class="upload-list"></div>
+        </div>
+      </section>
+
+      <section style="margin-top:28px">
+        <h3>Reader Preview</h3>
+        <div class="reader-panel">
+          <div id="readerGrid" class="upload-list"></div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <div class="viewer-overlay" id="viewerOverlay">
+    <div class="viewer">
+      <div class="toolbar">
+        <div class="controls">
+          <button class="btn" id="prevBtn">Previous</button>
+          <button class="btn" id="nextBtn">Next</button>
+          <div id="pageIndicator" style="margin-left:12px"></div>
+        </div>
+        <div>
+          <button class="close-x" id="closeViewer">Close</button>
+        </div>
+      </div>
+      <div class="viewer-body">
+        <div class="canvas-area">
+          <canvas id="pdfCanvas" class="turn"></canvas>
+        </div>
+        <div class="comment-area">
+          <div id="commentSection">
+            <h4>Comments & Reactions</h4>
+          <div id="commentList" style="max-height:180px;overflow:auto;margin-bottom:8px"></div>
+          <div id="commentForm" style="display:flex;gap:8px;align-items:flex-start">
+            <textarea id="commentInput" placeholder="Write a comment..." style="flex:1;padding:8px;border-radius:8px;border:1px solid #ddd"></textarea>
+            <div style="display:flex;flex-direction:column;gap:8px">
+              <button id="commentBtn" class="btn">Post</button>
+              <div style="display:flex;gap:6px;align-items:center">
+                <button id="thumbUp" class="btn">👍</button>
+                <button id="thumbDown" class="btn">👎</button>
+                <div id="voteInfo" style="margin-left:8px;color:#6b5b4b"></div>
+              </div>
+            </div>
+          </div>
+          <div class="note" style="margin-top:8px">You must sign in with Google to comment or react.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="about-overlay" id="aboutOverlay" style="display:none;align-items:center;justify-content:center;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:45">
+    <div style="background:#fff;padding:20px;border-radius:8px;max-width:720px;width:90%;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <strong>About this Book</strong>
+        <button id="closeAbout" class="close-x">Close</button>
+      </div>
+      <div id="aboutContent" style="color:#3b2f24;line-height:1.4"></div>
+    </div>
+  </div>
+
+<script>
+// Simple IndexedDB helper
+const DB_NAME = 'geeBooksDB', STORE = 'books';
+function openDB(){
+  return new Promise((res,rej)=>{
+    const r = indexedDB.open(DB_NAME,1);
+    r.onupgradeneeded = ()=> r.result.createObjectStore(STORE,{keyPath:'id',autoIncrement:true});
+    r.onsuccess = ()=> res(r.result);
+    r.onerror = ()=> rej(r.error);
+  });
+}
+
+// Firebase initialization: replace with your own Firebase project config
+const firebaseConfig = {
+  apiKey: "YOUR_API_KEY",
+  authDomain: "YOUR_AUTH_DOMAIN",
+  projectId: "YOUR_PROJECT_ID",
+  storageBucket: "YOUR_STORAGE_BUCKET",
+  messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+  appId: "YOUR_APP_ID"
+};
+firebase.initializeApp(firebaseConfig);
+const firestore = firebase.firestore();
+const storage = firebase.storage();
+
+async function uploadPdfToFirebase(pdfFile, storagePath){
+  const fileRef = storage.ref(storagePath);
+  const snapshot = await fileRef.put(pdfFile);
+  return await snapshot.ref.getDownloadURL();
+}
+
+async function saveBookMetadataToFirestore(metadata){
+  const docRef = await firestore.collection('books').add(metadata);
+  return docRef.id;
+}
+
+async function addBook(record){
+  const db = await openDB();
+  return new Promise((res,rej)=>{
+    const tx = db.transaction(STORE,'readwrite');
+    tx.objectStore(STORE).add(record).onsuccess = e=> res(e.target.result);
+    tx.onerror = e=> rej(e.target.error);
+  });
+}
+async function getAllBooks(){
+  const db = await openDB();
+  return new Promise((res,rej)=>{
+    const tx = db.transaction(STORE,'readonly');
+    const req = tx.objectStore(STORE).getAll();
+    req.onsuccess = ()=> res(req.result);
+    req.onerror = e=> rej(e.error);
+  });
+}
+
+async function getBook(id){
+  const db = await openDB();
+  return new Promise((res,rej)=>{
+    const tx = db.transaction(STORE,'readonly');
+    const req = tx.objectStore(STORE).get(id);
+    req.onsuccess = ()=> res(req.result);
+    req.onerror = e=> rej(e.error);
+  });
+}
+
+async function updateBook(book){
+  const db = await openDB();
+  return new Promise((res,rej)=>{
+    const tx = db.transaction(STORE,'readwrite');
+    const req = tx.objectStore(STORE).put(book);
+    req.onsuccess = ()=> res(req.result);
+    req.onerror = e=> rej(e.error);
+  });
+}
+
+async function deleteBook(id){
+  const db = await openDB();
+  return new Promise((res,rej)=>{
+    const tx = db.transaction(STORE,'readwrite');
+    const req = tx.objectStore(STORE).delete(id);
+    req.onsuccess = ()=> res();
+    req.onerror = e=> rej(e.error);
+  });
+}
+
+// UI wiring
+const enterBtn = document.getElementById('enterBtn');
+const app = document.getElementById('app');
+const uploadBtn = document.getElementById('uploadBtn');
+const titleInput = document.getElementById('titleInput');
+const coverInput = document.getElementById('coverInput');
+const pdfInput = document.getElementById('pdfInput');
+const adminList = document.getElementById('adminList');
+const readerGrid = document.getElementById('readerGrid');
+const switchToReader = document.getElementById('switchToReader');
+const googleSignBtn = document.getElementById('googleSignBtn');
+const signOutBtn = document.getElementById('signOutBtn');
+const signedInfo = document.getElementById('signedInfo');
+const adminLogin = document.getElementById('adminLogin');
+const adminAccessEmail = document.getElementById('adminAccessEmail');
+const adminControls = document.getElementById('adminControls');
+const commentList = document.getElementById('commentList');
+const commentInput = document.getElementById('commentInput');
+const commentBtn = document.getElementById('commentBtn');
+const thumbUp = document.getElementById('thumbUp');
+const thumbDown = document.getElementById('thumbDown');
+const voteInfo = document.getElementById('voteInfo');
+
+enterBtn.addEventListener('click', ()=>{
+  document.getElementById('cover').style.display='none';
+  app.style.display='block';
+  refreshLists();
+  updateSignedState();
+});
+
+switchToReader.addEventListener('click', ()=>{
+  // scroll to reader
+  document.querySelector('.reader-panel').scrollIntoView({behavior:'smooth'});
+});
+
+uploadBtn.addEventListener('click', async ()=>{
+  const title = titleInput.value.trim() || 'Untitled';
+  const description = (document.getElementById('descriptionInput').value || '').trim();
+  const coverFile = coverInput.files[0];
+  const pdfFile = pdfInput.files[0];
+  if(!coverFile || !pdfFile){alert('Please select both cover PNG and PDF');return}
+
+  // read cover as dataURL
+  const coverData = await new Promise(r=>{const fr=new FileReader();fr.onload=e=>r(e.target.result);fr.readAsDataURL(coverFile)});
+
+  // upload metadata and PDF to Firebase
+  try {
+    const remoteMetadata = {
+      title,
+      description,
+      created: new Date().toISOString(),
+      adminEmail: JSON.parse(sessionStorage.getItem('geeUser') || '{}').email || null
+    };
+    const remoteId = await saveBookMetadataToFirestore(remoteMetadata);
+    const storagePath = `books/${remoteId}/book.pdf`;
+    const remotePdfUrl = await uploadPdfToFirebase(pdfFile, storagePath);
+
+    const pdfBlob = pdfFile.slice();
+    const rec = {
+      title,
+      description,
+      coverData,
+      pdfBlob,
+      created: new Date().toISOString(),
+      comments: [],
+      votes: {},
+      remoteDocId: remoteId,
+      remotePdfUrl,
+      storagePath
+    };
+    await addBook(rec);
+    titleInput.value='';document.getElementById('descriptionInput').value='';coverInput.value='';pdfInput.value='';
+    refreshLists();
+    alert('Book uploaded to Firebase successfully.');
+  } catch (err) {
+    console.error('Firebase upload failed', err);
+    alert('Failed to upload PDF to Firebase. Check your Firebase config and network connection.');
+  }
+});
+
+// Admin email allowed
+const adminAuthorizedEmail = 'gerielpalma123@gmail.com';
+
+// Simple client-side (mock) Google sign-in — replace with real OAuth for production
+function updateSignedState(){
+  const u = sessionStorage.getItem('geeUser');
+  if(u){
+    const user = JSON.parse(u);
+    signedInfo.textContent = `Signed in: ${user.name} (${user.email})`;
+    googleSignBtn.style.display='none';
+    signOutBtn.style.display='inline-block';
+  } else {
+    signedInfo.textContent = '';
+    googleSignBtn.style.display='inline-block';
+    signOutBtn.style.display='none';
+  }
+}
+
+googleSignBtn.addEventListener('click', ()=>{
+  const name = prompt('Enter your Google display name (mock sign-in)');
+  const email = prompt('Enter your Google email (must be @gmail.com)');
+  if(!email || !email.includes('@gmail.com')){alert('Please use a valid Gmail address');return}
+  const user = {name:name||email.split('@')[0], email};
+  sessionStorage.setItem('geeUser', JSON.stringify(user));
+  updateSignedState();
+});
+
+signOutBtn.addEventListener('click', ()=>{sessionStorage.removeItem('geeUser'); updateSignedState();});
+
+// Admin unlock
+adminLogin.addEventListener('click', ()=>{
+  const entered = (adminAccessEmail.value||'').trim().toLowerCase();
+  if(entered === adminAuthorizedEmail){ adminControls.style.display='block'; alert('Admin unlocked'); } else { alert('Not authorized'); }
+});
+
+async function refreshLists(){
+  const books = await getAllBooks();
+  // sort by created date
+  books.sort((a,b)=> new Date(a.created)-new Date(b.created));
+  adminList.innerHTML=''; readerGrid.innerHTML='';
+  books.forEach(b=>{
+    const votes = b.votes ? Object.values(b.votes).reduce((s,v)=>s+v,0) : 0;
+    const commentsCount = b.comments ? b.comments.length : 0;
+
+    // admin list card
+    const card = document.createElement('div');card.className='book-card';
+    const img = document.createElement('img');img.src = b.coverData;card.appendChild(img);
+    const t = document.createElement('div');t.className='title';t.textContent=b.title;card.appendChild(t);
+    const info = document.createElement('div'); info.style.marginTop='6px'; info.style.color='#6b5b4b'; info.textContent = `Pages: ${commentsCount} comments · ${votes} votes`;
+    card.appendChild(info);
+    const aboutBtn = document.createElement('button'); aboutBtn.className='btn'; aboutBtn.textContent='About'; aboutBtn.style.background='#6b5b4b'; aboutBtn.style.marginRight='6px'; aboutBtn.addEventListener('click', ()=> showAbout(b)); card.appendChild(aboutBtn);
+    const readBtn = document.createElement('button');readBtn.className='btn';readBtn.textContent='Read';
+    readBtn.addEventListener('click', ()=> openViewer(b));
+    card.appendChild(readBtn);
+
+    if(adminControls.style.display !== 'none'){
+      const del = document.createElement('button'); del.className='btn'; del.style.background='#c94b4b'; del.textContent='Delete';
+      del.addEventListener('click', async ()=>{ if(confirm('Delete this book?')){ await deleteBook(b.id); refreshLists(); } });
+      card.appendChild(del);
+    }
+
+    adminList.appendChild(card);
+
+    // reader grid item (visible to clients)
+    const card2 = document.createElement('div'); card2.className='book-card';
+    const img2 = document.createElement('img'); img2.src = b.coverData; card2.appendChild(img2);
+    const t2 = document.createElement('div'); t2.className='title'; t2.textContent = b.title; card2.appendChild(t2);
+    const meta = document.createElement('div'); meta.style.color='#7a6b5a'; meta.style.fontSize='0.9rem'; meta.textContent = `${commentsCount} comments · ${votes} votes`;
+    card2.appendChild(meta);
+    const about2 = document.createElement('button'); about2.className='btn'; about2.textContent='About'; about2.style.background='#6b5b4b'; about2.style.marginRight='6px'; about2.addEventListener('click', ()=> showAbout(b)); card2.appendChild(about2);
+    const read2 = document.createElement('button'); read2.className='btn'; read2.textContent='Read';
+    read2.addEventListener('click', ()=> openViewer(b)); card2.appendChild(read2);
+    readerGrid.appendChild(card2);
+  });
+}
+
+let currentBookId = null;
+
+async function renderCommentsForBook(book){
+  commentList.innerHTML = '';
+  const comments = book.comments || [];
+  comments.forEach(c=>{
+    const el = document.createElement('div'); el.style.padding='8px'; el.style.borderBottom='1px solid #f0f0f0';
+    el.innerHTML = `<strong style="color:#3b2f24">${escapeHtml(c.userName)}</strong> <span style="color:#6b5b4b;font-size:0.9rem">${new Date(c.created).toLocaleString()}</span><div style="margin-top:6px">${escapeHtml(c.text)}</div>`;
+    commentList.appendChild(el);
+  });
+  // votes
+  const votes = book.votes ? Object.values(book.votes).reduce((s,v)=>s+v,0) : 0;
+  voteInfo.textContent = `Score: ${votes}`;
+}
+
+function escapeHtml(str){ return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+// comment & vote handlers
+commentBtn.addEventListener('click', async ()=>{
+  const u = sessionStorage.getItem('geeUser');
+  if(!u){ alert('Please sign in with Google to comment'); return; }
+  const user = JSON.parse(u);
+  const text = commentInput.value.trim(); if(!text) return;
+  const book = await getBook(currentBookId);
+  if(!book.comments) book.comments = [];
+  book.comments.push({id: Date.now(), userEmail: user.email, userName: user.name, text, created: new Date().toISOString()});
+  await updateBook(book);
+  commentInput.value='';
+  renderCommentsForBook(book);
+  refreshLists();
+});
+
+thumbUp.addEventListener('click', async ()=>{
+  const u = sessionStorage.getItem('geeUser'); if(!u){ alert('Sign in first'); return; }
+  const user = JSON.parse(u);
+  const book = await getBook(currentBookId);
+  if(!book.votes) book.votes = {};
+  book.votes[user.email] = 1;
+  await updateBook(book);
+  renderCommentsForBook(book);
+  refreshLists();
+});
+
+thumbDown.addEventListener('click', async ()=>{
+  const u = sessionStorage.getItem('geeUser'); if(!u){ alert('Sign in first'); return; }
+  const user = JSON.parse(u);
+  const book = await getBook(currentBookId);
+  if(!book.votes) book.votes = {};
+  book.votes[user.email] = -1;
+  await updateBook(book);
+  renderCommentsForBook(book);
+  refreshLists();
+});
+
+// show about modal
+const aboutOverlay = document.getElementById('aboutOverlay');
+const aboutContent = document.getElementById('aboutContent');
+document.getElementById('closeAbout').addEventListener('click', ()=>{ aboutOverlay.style.display='none'; aboutContent.innerHTML=''; });
+
+function showAbout(book){
+  const desc = book.description || 'No description provided.';
+  aboutContent.textContent = desc;
+  aboutOverlay.style.display = 'flex';
+}
+
+// PDF viewer using PDF.js
+const viewerOverlay = document.getElementById('viewerOverlay');
+const viewerEl = document.querySelector('.viewer');
+const pdfCanvas = document.getElementById('pdfCanvas');
+const ctx = pdfCanvas.getContext('2d');
+const prevBtn = document.getElementById('prevBtn');
+const nextBtn = document.getElementById('nextBtn');
+const pageIndicator = document.getElementById('pageIndicator');
+let currentPdf = null, currentPage = 1, totalPages = 0;
+
+async function openViewer(book){
+  // refresh book record from DB to get latest comments/votes
+  const fresh = await getBook(book.id);
+  if(!fresh){ alert('Book not found'); return; }
+  currentBookId = fresh.id;
+  let loadUrl;
+  if(fresh.remotePdfUrl){
+    loadUrl = fresh.remotePdfUrl;
+  } else {
+    const blob = fresh.pdfBlob instanceof Blob ? fresh.pdfBlob : new Blob([fresh.pdfBlob]);
+    loadUrl = URL.createObjectURL(blob);
+  }
+  const loadingTask = pdfjsLib.getDocument(loadUrl);
+  currentPdf = await loadingTask.promise;
+  totalPages = currentPdf.numPages;
+  currentPage = 1;
+  viewerOverlay.style.display='flex';
+  viewerEl.classList.add('fullscreen');
+  renderPage(currentPage);
+  renderCommentsForBook(fresh);
+}
+
+async function renderPage(pageNum, direction){
+  if (direction){
+    pdfCanvas.classList.remove('flip-in', 'flip-in-active', 'flip-out-next', 'flip-out-prev');
+    pdfCanvas.classList.add(direction === 'prev' ? 'flip-out-prev' : 'flip-out-next');
+    await new Promise(resolve => setTimeout(resolve, 180));
+  }
+
+  const page = await currentPdf.getPage(pageNum);
+  const canvasContainer = pdfCanvas.parentElement;
+  const containerRect = canvasContainer.getBoundingClientRect();
+  const availableWidth = containerRect.width;
+  const availableHeight = containerRect.height;
+  const unscaledViewport = page.getViewport({scale:1});
+  const scale = Math.min(availableWidth / unscaledViewport.width, availableHeight / unscaledViewport.height);
+  const viewport = page.getViewport({scale});
+
+  pdfCanvas.width = Math.floor(viewport.width * window.devicePixelRatio);
+  pdfCanvas.height = Math.floor(viewport.height * window.devicePixelRatio);
+  pdfCanvas.style.width = `${Math.floor(viewport.width)}px`;
+  pdfCanvas.style.height = `${Math.floor(viewport.height)}px`;
+  ctx.setTransform(window.devicePixelRatio,0,0,window.devicePixelRatio,0,0);
+
+  const renderContext = {canvasContext:ctx, viewport};
+  await page.render(renderContext).promise;
+
+  pdfCanvas.classList.remove('flip-out-next', 'flip-out-prev');
+  pdfCanvas.classList.add('flip-in');
+  requestAnimationFrame(() => pdfCanvas.classList.add('flip-in-active'));
+  setTimeout(() => pdfCanvas.classList.remove('flip-in', 'flip-in-active'), 450);
+
+  pageIndicator.textContent = `Page ${pageNum} / ${totalPages}`;
+}
+
+prevBtn.addEventListener('click', ()=>{if(currentPdf && currentPage>1){currentPage--;renderPage(currentPage,'prev')}});
+nextBtn.addEventListener('click', ()=>{if(currentPdf && currentPage<totalPages){currentPage++;renderPage(currentPage,'next')}});
+
+document.getElementById('closeViewer').addEventListener('click', ()=>{viewerOverlay.style.display='none'; if(currentPdf){currentPdf = null} currentBookId = null; viewerEl.classList.remove('fullscreen');});
+
+// initialize
+refreshLists();
+
+</script>
+</body>
+</html>
